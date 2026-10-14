@@ -1,0 +1,7 @@
+# 注音碼轉換設定
+
+[symbols]
+# drop：品名中的符號（- / . 等）一律略過；keep：一律保留
+mode = "drop"
+# 與 mode 相反處理的符號。例：mode = "drop" 時寫 ["+"]，代表只保留 +
+exceptions = []
