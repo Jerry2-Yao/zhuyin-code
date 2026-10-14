@@ -1,27 +1,19 @@
 """用使用者提供的實際商品資料驗證注音碼。"""
 
+from pathlib import Path
+
 import pytest
 
 from zhuyin_code import Encoder
 
-# (PRO_NAME, PH_CODE) —— 來源：使用者既有系統的商品檔截圖
+# (品名, 預期注音碼) —— 與其他語言範例共用 tests/samples.tsv
+SAMPLES_FILE = Path(__file__).with_name("samples.tsv")
 SAMPLES = [
-    ("SF-9950三花彩色長袖圓領L", "SF9950NCHNTVMXL"),
-    ("SF-9950三花彩色長袖圓領M", "SF9950NCHNTVMXM"),
-    ("SF-9950三花彩色長袖圓領XL", "SF9950NCHNTVMXXL"),
-    ("新嬌生嬰兒滋潤洗髮精500ML", "VRGU-YBVZR500ML"),  # 品名由碼反推，待使用者確認
-    ("優生寬口徑奶瓶蓋", "UGDDRSQE"),
-    ("麗奇牙周對策牙刷短刷頭", "XFU52HUG2GW"),
-    ("麗奇牙周對策牙刷標準刷頭", "XFU52HUG15GW"),
-    ("嬌生沐浴精1000ML", "RGAMR1000ML"),
-    ("嬌生嬰兒牛奶沐浴乳1000ML", "RGU-SSAMB1000ML"),
-    ("嬌生嬰兒睡眠沐浴精1000ML", "RGU-GAAMR1000ML"),
-    ("優生矽晶安撫標準型奶嘴L", "UGVR0Z15VSYL"),
-    ("優生矽晶安撫雙扁型奶嘴初S", "UGVR0ZG1VSYTS"),
-    ("優生矽晶安撫拇指型奶嘴初S", "UGVR0ZA5VSYTS"),
-    ("優生矽晶安撫拇指型奶嘴L", "UGVR0ZA5VSYL"),
-    # 「UG2VDDVEY2 優生??寬口吸管組-大」截圖字跡不清，待確認後補上
+    tuple(line.split("\t")[:2])
+    for line in SAMPLES_FILE.read_text(encoding="utf-8").splitlines()
+    if line and not line.startswith("#")
 ]
+# 「UG2VDDVEY2 優生??寬口吸管組-大」截圖字跡不清，待確認後補上
 
 
 @pytest.fixture(scope="module")

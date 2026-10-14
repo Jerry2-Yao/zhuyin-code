@@ -80,9 +80,17 @@ data/
 
 覆寫表中**單一字**的條目會蓋過單字表，**兩字以上**的條目則是優先比對的詞組。
 
+## 支援語言
+
+注音碼的核心是 `data/` 底下的對照表，**任何語言都能使用**。[`examples/`](examples/) 目錄提供 **C#、JavaScript、Java、Python、C、C++** 六種語言的單檔範例，都對同一份真實商品資料驗證，輸出完全一致。
+
+| C# | JavaScript | Java | Python | C | C++ |
+|:-:|:-:|:-:|:-:|:-:|:-:|
+| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+
 ## 其他語言實作規格
 
-Python 版（`src/zhuyin_code/encoder.py`）是參考實作。用其他語言重寫時請遵循：
+`examples/` 已經涵蓋常用語言。要移植到其他語言（Go、PHP、T-SQL…）時，請遵循以下規格，並用 [`tests/samples.tsv`](tests/samples.tsv) 驗收：
 
 ```
 encode(text):
@@ -100,7 +108,7 @@ encode(text):
   5. 串接所有結果
 ```
 
-最好的驗收方式是拿 `tests/test_samples.py` 的真實商品資料做對照測試，所有語言的實作結果都必須完全相同。
+[`tests/samples.tsv`](tests/samples.tsv) 是各語言共用的驗收資料，所有實作的結果都必須完全相同。
 
 ## 使用（Python）
 
