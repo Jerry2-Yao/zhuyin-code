@@ -6,7 +6,9 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.text.Normalizer;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
@@ -126,9 +128,62 @@ public class ZhuyinCode {
         return table;
     }
 
-    // ── 範例：用共用樣本資料驗證 ──
+    // 讀取單欄 CSV（UTF-8，可含 BOM 與 "..." 引號）
+    static List<String> readCsvNames(Path path) throws IOException {
+        List<String> names = new ArrayList<>();
+        for (String l : Files.readAllLines(path, StandardCharsets.UTF_8)) {
+            if (!l.isEmpty() && l.charAt(0) == '﻿') l = l.substring(1);
+            if (l.length() >= 2 && l.startsWith("\"") && l.endsWith("\"")) l = l.substring(1, l.length() - 1).replace("\"\"", "\"");
+            if (!l.isBlank()) names.add(l);
+        }
+        return names;
+    }
+
+    static long usedHeap() {
+        Runtime rt = Runtime.getRuntime();
+        for (int i = 0; i < 3; i++) System.gc();
+        return rt.totalMemory() - rt.freeMemory();
+    }
+
+    static void bench(PrintStream out, Path root, Path csv, Path outFile) throws IOException {
+        final int rounds = 10;
+        List<String> names = readCsvNames(csv);
+
+        long memBefore = usedHeap();
+        long t0 = System.nanoTime();
+        ZhuyinCode encoder = load(root.resolve("data"), "zhuyin", "product");
+        double loadMs = (System.nanoTime() - t0) / 1e6;
+        double memMb = (usedHeap() - memBefore) / 1024.0 / 1024.0;
+
+        List<String> codes = new ArrayList<>();
+        for (String n : names) codes.add(encoder.encode(n)); // 暖機
+        t0 = System.nanoTime();
+        for (int r = 0; r < rounds; r++)
+            for (String n : names) encoder.encode(n);
+        double perUs = (System.nanoTime() - t0) / 1e3 / (rounds * names.size());
+
+        if (outFile != null) {
+            StringBuilder sb = new StringBuilder();
+            for (int k = 0; k < names.size(); k++) sb.append(codes.get(k)).append('\t').append(names.get(k)).append('\n');
+            Files.writeString(outFile, sb.toString(), StandardCharsets.UTF_8);
+        }
+        out.println("=== 注音碼效能評測（Java） ===");
+        out.printf("商品筆數        : %d%n", names.size());
+        out.printf("1. 載入時間      : %.1f ms%n", loadMs);
+        out.printf("2. 平均轉碼時間  : %.2f µs / 筆（%d 輪，共 %d 次）%n", perUs, rounds, rounds * names.size());
+        out.printf("3. 載入記憶體    : %.1f MB（GC 後 heap 使用量差值）%n", memMb);
+        java.lang.ref.Reference.reachabilityFence(encoder); // 確保量記憶體時 encoder 仍存活
+    }
+
+    // ── 範例：用共用樣本資料驗證；bench 模式做效能評測 ──
+    // 用法：java ZhuyinCode.java [repo 根目錄]
+    //       java ZhuyinCode.java bench <品名.csv> [轉碼結果輸出檔]
     public static void main(String[] args) throws IOException {
         PrintStream out = new PrintStream(System.out, true, StandardCharsets.UTF_8);
+        if (args.length > 1 && args[0].equals("bench")) {
+            bench(out, Path.of("../.."), Path.of(args[1]), args.length > 2 ? Path.of(args[2]) : null);
+            return;
+        }
         Path root = Path.of(args.length > 0 ? args[0] : "../..");
         ZhuyinCode encoder = load(root.resolve("data"), "zhuyin", "product");
         int fail = 0;

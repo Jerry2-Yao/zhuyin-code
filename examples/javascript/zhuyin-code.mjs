@@ -105,7 +105,45 @@ function maxMatch(run, table, max, codes, start, end) {
   }
 }
 
-// ── 範例：用共用樣本資料驗證 ──
+// 讀取單欄 CSV（UTF-8，可含 BOM 與 "..." 引號）
+function readCsvNames(file) {
+  return fs.readFileSync(file, "utf8").replace(/^﻿/, "").split(/\r?\n/)
+    .map((l) => (l.length >= 2 && l.startsWith('"') && l.endsWith('"') ? l.slice(1, -1).replaceAll('""', '"') : l))
+    .filter((l) => l.trim());
+}
+
+function bench(root, csvFile, outFile, rounds = 10) {
+  const names = readCsvNames(csvFile);
+  const now = () => Number(process.hrtime.bigint()) / 1e6; // ms
+
+  globalThis.gc?.();
+  const heapBefore = process.memoryUsage().heapUsed;
+  let t0 = now();
+  const encoder = ZhuyinEncoder.load(path.join(root, "data"), "zhuyin", "product");
+  const loadMs = now() - t0;
+  globalThis.gc?.();
+  const memMb = (process.memoryUsage().heapUsed - heapBefore) / 1024 / 1024;
+
+  const codes = names.map((n) => encoder.encode(n)); // 暖機
+  t0 = now();
+  for (let r = 0; r < rounds; r++) for (const n of names) encoder.encode(n);
+  const perUs = ((now() - t0) * 1000) / (rounds * names.length);
+
+  if (outFile) fs.writeFileSync(outFile, codes.map((c, k) => `${c}\t${names[k]}\n`).join(""));
+  console.log("=== 注音碼效能評測（JavaScript） ===");
+  console.log(`商品筆數        : ${names.length}`);
+  console.log(`1. 載入時間      : ${loadMs.toFixed(1)} ms`);
+  console.log(`2. 平均轉碼時間  : ${perUs.toFixed(2)} µs / 筆（${rounds} 輪，共 ${rounds * names.length} 次）`);
+  console.log(`3. 載入記憶體    : ${memMb.toFixed(1)} MB（V8 heapUsed 差值${globalThis.gc ? "" : "，未加 --expose-gc 僅供參考"}）`);
+}
+
+// ── 範例：用共用樣本資料驗證；bench 模式做效能評測 ──
+// 用法：node zhuyin-code.mjs [repo 根目錄]
+//       node --expose-gc zhuyin-code.mjs bench <品名.csv> [轉碼結果輸出檔]
+if (process.argv[2] === "bench") {
+  bench(path.join("..", ".."), process.argv[3], process.argv[4]);
+  process.exit(0);
+}
 const root = process.argv[2] ?? path.join("..", "..");
 const encoder = ZhuyinEncoder.load(path.join(root, "data"), "zhuyin", "product");
 let fail = 0;

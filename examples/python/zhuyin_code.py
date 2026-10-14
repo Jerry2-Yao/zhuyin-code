@@ -97,9 +97,61 @@ def _max_match(run, table, max_len, codes, start, end):
             i += 1
 
 
-# ── 範例：用共用樣本資料驗證 ──
+def read_csv_names(path: Path) -> list[str]:
+    """讀取單欄 CSV（UTF-8，可含 BOM 與 "..." 引號）。"""
+    names = []
+    for line in path.read_text(encoding="utf-8-sig").splitlines():
+        if line.startswith('"') and line.endswith('"') and len(line) >= 2:
+            line = line[1:-1].replace('""', '"')
+        if line.strip():
+            names.append(line)
+    return names
+
+
+def bench(root: Path, csv_path: Path, out_path: Path | None, rounds: int = 10) -> None:
+    import time
+    import tracemalloc
+
+    names = read_csv_names(csv_path)
+
+    t0 = time.perf_counter()
+    encoder = ZhuyinEncoder.load(root / "data", "zhuyin", "product")
+    load_ms = (time.perf_counter() - t0) * 1000
+
+    tracemalloc.start()  # 另外載入一份量記憶體（tracemalloc 會拖慢速度，所以不和計時混在一起）
+    probe = ZhuyinEncoder.load(root / "data", "zhuyin", "product")
+    mem_mb = tracemalloc.get_traced_memory()[0] / 1024 / 1024
+    tracemalloc.stop()
+    del probe
+
+    codes = [encoder.encode(n) for n in names]  # 暖機
+    t0 = time.perf_counter()
+    for _ in range(rounds):
+        for n in names:
+            encoder.encode(n)
+    per_us = (time.perf_counter() - t0) * 1e6 / (rounds * len(names))
+
+    if out_path:
+        out_path.write_text("".join(f"{c}\t{n}\n" for c, n in zip(codes, names)), encoding="utf-8", newline="\n")
+    print_report("Python", len(names), load_ms, per_us, rounds, mem_mb, "tracemalloc")
+
+
+def print_report(lang, count, load_ms, per_us, rounds, mem_mb, mem_method):
+    print(f"=== 注音碼效能評測（{lang}） ===")
+    print(f"商品筆數        : {count}")
+    print(f"1. 載入時間      : {load_ms:.1f} ms")
+    print(f"2. 平均轉碼時間  : {per_us:.2f} µs / 筆（{rounds} 輪，共 {rounds * count} 次）")
+    print(f"3. 載入記憶體    : {mem_mb:.1f} MB（{mem_method}）")
+
+
+# ── 範例：用共用樣本資料驗證；bench 模式做效能評測 ──
+# 用法：python zhuyin_code.py [repo 根目錄]
+#       python zhuyin_code.py bench <品名.csv> [轉碼結果輸出檔]
 if __name__ == "__main__":
     sys.stdout.reconfigure(encoding="utf-8")
+    if len(sys.argv) > 2 and sys.argv[1] == "bench":
+        bench(Path("../.."), Path(sys.argv[2]), Path(sys.argv[3]) if len(sys.argv) > 3 else None)
+        sys.exit(0)
     root = Path(sys.argv[1] if len(sys.argv) > 1 else "../..")
     encoder = ZhuyinEncoder.load(root / "data", "zhuyin", "product")
     fail = 0

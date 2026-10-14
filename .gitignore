@@ -11,3 +11,7 @@ wheels/
 
 # 原始下載碼表（由 scripts/build_data.py 下載）
 raw/
+
+# 使用者的實際商品資料（評測用，不公開）
+中文.csv
+bench-out/

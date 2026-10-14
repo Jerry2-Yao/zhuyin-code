@@ -88,6 +88,8 @@ data/
 |:-:|:-:|:-:|:-:|:-:|:-:|
 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
+效能方面：3,000 筆實際商品實測，每筆轉碼時間在 0.7 µs（C）到 10 µs（Python）之間，載入對照表需要 12–55 ms、2.6–6.2 MB 記憶體。詳見 [examples/README.md](examples/README.md#效能評測)。
+
 ## 其他語言實作規格
 
 `examples/` 已經涵蓋常用語言。要移植到其他語言（Go、PHP、T-SQL…）時，請遵循以下規格，並用 [`tests/samples.tsv`](tests/samples.tsv) 驗收：

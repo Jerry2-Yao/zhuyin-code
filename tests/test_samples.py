@@ -13,7 +13,6 @@ SAMPLES = [
     for line in SAMPLES_FILE.read_text(encoding="utf-8").splitlines()
     if line and not line.startswith("#")
 ]
-# 「UG2VDDVEY2 優生??寬口吸管組-大」截圖字跡不清，待確認後補上
 
 
 @pytest.fixture(scope="module")

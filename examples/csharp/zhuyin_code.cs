@@ -1,8 +1,15 @@
 // 注音碼 C# 範例（.NET 10 單檔程式）
 // 執行：dotnet run zhuyin_code.cs [repo 根目錄，預設 ../..]
+//       dotnet run -c Release zhuyin_code.cs bench <品名.csv> [轉碼結果輸出檔]
+using System.Diagnostics;
 using System.Text;
 
 Console.OutputEncoding = Encoding.UTF8;
+if (args.Length > 1 && args[0] == "bench")
+{
+    Bench.Run(Path.Combine("..", ".."), args[1], args.Length > 2 ? args[2] : null);
+    return 0;
+}
 var root = args.Length > 0 ? args[0] : Path.Combine("..", "..");
 var encoder = ZhuyinEncoder.Load(Path.Combine(root, "data"), "zhuyin", "product");
 
@@ -17,6 +24,42 @@ foreach (var line in File.ReadLines(Path.Combine(root, "tests", "samples.tsv")))
 }
 Console.WriteLine(fail == 0 ? "全部通過" : $"{fail} 筆不符");
 return fail == 0 ? 0 : 1;
+
+static class Bench
+{
+    // 讀取單欄 CSV（UTF-8，可含 BOM 與 "..." 引號）
+    static List<string> ReadCsvNames(string path) =>
+        File.ReadLines(path, Encoding.UTF8)
+            .Select(l => l.Length >= 2 && l.StartsWith('"') && l.EndsWith('"') ? l[1..^1].Replace("\"\"", "\"") : l)
+            .Where(l => l.Trim().Length > 0)
+            .ToList();
+
+    public static void Run(string root, string csvPath, string? outPath, int rounds = 10)
+    {
+        var names = ReadCsvNames(csvPath);
+
+        long memBefore = GC.GetTotalMemory(forceFullCollection: true);
+        var sw = Stopwatch.StartNew();
+        var encoder = ZhuyinEncoder.Load(Path.Combine(root, "data"), "zhuyin", "product");
+        double loadMs = sw.Elapsed.TotalMilliseconds;
+        double memMb = (GC.GetTotalMemory(forceFullCollection: true) - memBefore) / 1024.0 / 1024.0;
+
+        var codes = names.Select(encoder.Encode).ToList(); // 暖機
+        sw.Restart();
+        for (int r = 0; r < rounds; r++)
+            foreach (var n in names) encoder.Encode(n);
+        double perUs = sw.Elapsed.TotalMicroseconds / (rounds * names.Count);
+
+        if (outPath != null)
+            File.WriteAllText(outPath, string.Concat(names.Select((n, k) => $"{codes[k]}\t{n}\n")));
+        Console.WriteLine("=== 注音碼效能評測（C#） ===");
+        Console.WriteLine($"商品筆數        : {names.Count}");
+        Console.WriteLine($"1. 載入時間      : {loadMs:F1} ms");
+        Console.WriteLine($"2. 平均轉碼時間  : {perUs:F2} µs / 筆（{rounds} 輪，共 {rounds * names.Count} 次）");
+        Console.WriteLine($"3. 載入記憶體    : {memMb:F1} MB（GC.GetTotalMemory 差值）");
+        GC.KeepAlive(encoder);
+    }
+}
 
 public class ZhuyinEncoder
 {

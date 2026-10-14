@@ -5,20 +5,26 @@
  *   MSVC：cl /utf-8 /O2 zhuyin_code.c
  *   GCC ：gcc -std=c99 -O2 -o zhuyin_code zhuyin_code.c
  * 執行：zhuyin_code [repo 根目錄，預設 ../..]
+ *       zhuyin_code bench <品名.csv> [轉碼結果輸出檔]
  *
  * 說明：C 標準函式庫沒有 Unicode NFKC 正規化，這裡只處理最常見的
  *       「全形 ASCII（U+FF01–FF5E）轉半形」與「全形空白 U+3000」。
  *       需要完整 NFKC 時可改用 ICU（unorm2_normalize）。
  */
+#define _POSIX_C_SOURCE 199309L /* clock_gettime */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #ifdef _WIN32
 #include <windows.h>
 #endif
 
 /* ── 簡易雜湊表：UTF-8 字串 → UTF-8 字串 ── */
+/* 對照表配置的位元組數（評測「載入記憶體」用；不含 malloc 自身的管理開銷） */
+static size_t g_table_bytes = 0;
+
 typedef struct { char *key; char *val; } Entry;
 typedef struct { Entry *slots; size_t cap, count; int max_len; } Table;
 
@@ -30,6 +36,7 @@ static uint64_t fnv1a(const char *s, size_t n) {
 
 static char *dupn(const char *s, size_t n) {
     char *p = malloc(n + 1);
+    g_table_bytes += n + 1;
     memcpy(p, s, n);
     p[n] = '\0';
     return p;
@@ -40,6 +47,7 @@ static void table_init(Table *t) {
     t->count = 0;
     t->max_len = 1;
     t->slots = calloc(t->cap, sizeof(Entry));
+    g_table_bytes += t->cap * sizeof(Entry);
 }
 
 static Entry *table_find(const Table *t, const char *k, size_t kn) {
@@ -57,12 +65,13 @@ static void table_put(Table *t, const char *k, size_t kn, const char *v) {
         size_t old_cap = t->cap;
         t->cap *= 2;
         t->slots = calloc(t->cap, sizeof(Entry));
+        g_table_bytes += t->cap * sizeof(Entry) - old_cap * sizeof(Entry);
         for (size_t i = 0; i < old_cap; i++)
             if (old[i].key) *table_find(t, old[i].key, strlen(old[i].key)) = old[i];
         free(old);
     }
     Entry *e = table_find(t, k, kn);
-    if (e->key) { free(e->val); e->val = dupn(v, strlen(v)); return; }
+    if (e->key) { g_table_bytes -= strlen(e->val) + 1; free(e->val); e->val = dupn(v, strlen(v)); return; }
     e->key = dupn(k, kn);
     e->val = dupn(v, strlen(v));
     t->count++;
@@ -230,11 +239,87 @@ static void encode(const Encoder *e, const char *text, char *out) {
     free(codes);
 }
 
-/* ── 範例：用共用樣本資料驗證 ── */
+/* ── 效能評測 ── */
+static double now_ms(void) {
+#ifdef _WIN32
+    LARGE_INTEGER f, c;
+    QueryPerformanceFrequency(&f);
+    QueryPerformanceCounter(&c);
+    return (double)c.QuadPart * 1000.0 / (double)f.QuadPart;
+#else
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec * 1000.0 + ts.tv_nsec / 1e6;
+#endif
+}
+
+/* 讀取單欄 CSV（UTF-8，可含 BOM 與 "..." 引號），回傳筆數 */
+static size_t read_csv_names(const char *path, char ***names_out) {
+    FILE *fp = fopen(path, "rb");
+    if (!fp) return 0;
+    size_t n = 0, cap = 1024;
+    char **names = malloc(cap * sizeof *names), line[4096];
+    while (fgets(line, sizeof line, fp)) {
+        line[strcspn(line, "\r\n")] = '\0';
+        char *s = line;
+        if ((unsigned char)s[0] == 0xEF && (unsigned char)s[1] == 0xBB && (unsigned char)s[2] == 0xBF) s += 3;
+        size_t len = strlen(s);
+        if (len >= 2 && s[0] == '"' && s[len - 1] == '"') { /* 去掉外層引號，"" 還原為 " */
+            size_t o = 0;
+            for (size_t i = 1; i < len - 1; i++) {
+                s[o++] = s[i];
+                if (s[i] == '"' && s[i + 1] == '"') i++;
+            }
+            s[o] = '\0';
+        }
+        if (strspn(s, " \t") == strlen(s)) continue;
+        if (n == cap) names = realloc(names, (cap *= 2) * sizeof *names);
+        names[n++] = dupn(s, strlen(s));
+    }
+    fclose(fp);
+    *names_out = names;
+    return n;
+}
+
+static int bench(const char *root, const char *csv, const char *out_path) {
+    const int rounds = 10;
+    char **names, path[1024], buf[4096];
+    size_t n = read_csv_names(csv, &names);
+    if (n == 0) { fprintf(stderr, "讀不到 %s\n", csv); return 2; }
+
+    Encoder enc;
+    size_t mem_before = g_table_bytes;
+    double t0 = now_ms();
+    snprintf(path, sizeof path, "%s/data", root);
+    encoder_load(&enc, path, "zhuyin", "product");
+    double load_ms = now_ms() - t0;
+    double mem_mb = (double)(g_table_bytes - mem_before) / 1024.0 / 1024.0;
+
+    FILE *out = out_path ? fopen(out_path, "wb") : NULL;
+    for (size_t k = 0; k < n; k++) { /* 暖機 */
+        encode(&enc, names[k], buf);
+        if (out) fprintf(out, "%s\t%s\n", buf, names[k]);
+    }
+    if (out) fclose(out);
+    t0 = now_ms();
+    for (int r = 0; r < rounds; r++)
+        for (size_t k = 0; k < n; k++) encode(&enc, names[k], buf);
+    double per_us = (now_ms() - t0) * 1000.0 / ((double)rounds * (double)n);
+
+    printf("=== 注音碼效能評測（C） ===\n");
+    printf("商品筆數        : %zu\n", n);
+    printf("1. 載入時間      : %.1f ms\n", load_ms);
+    printf("2. 平均轉碼時間  : %.2f µs / 筆（%d 輪，共 %zu 次）\n", per_us, rounds, rounds * n);
+    printf("3. 載入記憶體    : %.1f MB（對照表配置的位元組數）\n", mem_mb);
+    return 0;
+}
+
+/* ── 範例：用共用樣本資料驗證；bench 模式做效能評測 ── */
 int main(int argc, char **argv) {
 #ifdef _WIN32
     SetConsoleOutputCP(CP_UTF8);
 #endif
+    if (argc > 2 && strcmp(argv[1], "bench") == 0) return bench("../..", argv[2], argc > 3 ? argv[3] : NULL);
     const char *root = argc > 1 ? argv[1] : "../..";
     char path[1024], line[4096], out[4096];
     Encoder enc;

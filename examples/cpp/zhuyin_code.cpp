@@ -4,11 +4,16 @@
 //   MSVC：cl /std:c++17 /utf-8 /EHsc /O2 zhuyin_code.cpp
 //   GCC ：g++ -std=c++17 -O2 -o zhuyin_code zhuyin_code.cpp
 // 執行：zhuyin_code [repo 根目錄，預設 ../..]
+//       zhuyin_code bench <品名.csv> [轉碼結果輸出檔]
 //
 // 說明：C++ 標準函式庫沒有 Unicode NFKC 正規化，這裡只處理最常見的
 //       「全形 ASCII（U+FF01–FF5E）轉半形」與「全形空白 U+3000」。
 //       需要完整 NFKC 時可改用 ICU（icu::Normalizer2）。
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cstdlib>
+#include <new>
 #include <cstdint>
 #include <fstream>
 #include <iomanip>
@@ -23,6 +28,25 @@
 #endif
 
 using Table = std::unordered_map<std::string, std::string>;
+
+// ── 評測用：統計 operator new 配置的位元組數（不含配置器自身的管理開銷）──
+// 複製到自己的專案時，這段可以整段刪除。
+static std::atomic<size_t> g_heapBytes{0};
+constexpr size_t kHeader = alignof(std::max_align_t);
+void* operator new(size_t n) {
+    auto* base = static_cast<char*>(std::malloc(n + kHeader));
+    if (!base) throw std::bad_alloc();
+    *reinterpret_cast<size_t*>(base) = n;
+    g_heapBytes += n;
+    return base + kHeader;
+}
+void operator delete(void* p) noexcept {
+    if (!p) return;
+    char* base = static_cast<char*>(p) - kHeader;
+    g_heapBytes -= *reinterpret_cast<size_t*>(base);
+    std::free(base);
+}
+void operator delete(void* p, size_t) noexcept { operator delete(p); }
 
 namespace {
 
@@ -183,11 +207,69 @@ private:
     }
 };
 
-// ── 範例：用共用樣本資料驗證 ──
+// ── 效能評測 ──
+// 讀取單欄 CSV（UTF-8，可含 BOM 與 "..." 引號）
+std::vector<std::string> readCsvNames(const std::string& path) {
+    std::vector<std::string> names;
+    std::ifstream in(path, std::ios::binary);
+    std::string l;
+    while (std::getline(in, l)) {
+        if (!l.empty() && l.back() == '\r') l.pop_back();
+        if (l.rfind("\xEF\xBB\xBF", 0) == 0) l.erase(0, 3);
+        if (l.size() >= 2 && l.front() == '"' && l.back() == '"') {
+            std::string s;
+            for (size_t i = 1; i + 1 < l.size(); i++) {
+                s += l[i];
+                if (l[i] == '"' && l[i + 1] == '"') i++;
+            }
+            l = s;
+        }
+        if (l.find_first_not_of(" \t") != std::string::npos) names.push_back(l);
+    }
+    return names;
+}
+
+int bench(const std::string& root, const std::string& csv, const char* outPath) {
+    using Clock = std::chrono::steady_clock;
+    const int rounds = 10;
+    auto names = readCsvNames(csv);
+    if (names.empty()) { std::cerr << "讀不到 " << csv << "\n"; return 2; }
+
+    size_t memBefore = g_heapBytes;
+    auto t0 = Clock::now();
+    auto encoder = ZhuyinEncoder::load(root + "/data", "zhuyin", "product");
+    double loadMs = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
+    double memMb = static_cast<double>(g_heapBytes - memBefore) / 1024.0 / 1024.0;
+
+    std::vector<std::string> codes;
+    for (const auto& n : names) codes.push_back(encoder.encode(n));  // 暖機
+    t0 = Clock::now();
+    size_t sink = 0;  // 避免編譯器把迴圈最佳化掉
+    for (int r = 0; r < rounds; r++)
+        for (const auto& n : names) sink += encoder.encode(n).size();
+    double perUs = std::chrono::duration<double, std::micro>(Clock::now() - t0).count() / (rounds * names.size());
+
+    if (outPath) {
+        std::ofstream out(outPath, std::ios::binary);
+        for (size_t k = 0; k < names.size(); k++) out << codes[k] << '\t' << names[k] << '\n';
+    }
+    std::cout << std::fixed << std::setprecision(1)
+              << "=== 注音碼效能評測（C++） ===\n"
+              << "商品筆數        : " << names.size() << "\n"
+              << "1. 載入時間      : " << loadMs << " ms\n"
+              << std::setprecision(2)
+              << "2. 平均轉碼時間  : " << perUs << " µs / 筆（" << rounds << " 輪，共 " << rounds * names.size() << " 次）\n"
+              << std::setprecision(1)
+              << "3. 載入記憶體    : " << memMb << " MB（operator new 配置的位元組數）\n";
+    return sink == 0 ? 1 : 0;
+}
+
+// ── 範例：用共用樣本資料驗證；bench 模式做效能評測 ──
 int main(int argc, char** argv) {
 #ifdef _WIN32
     SetConsoleOutputCP(CP_UTF8);
 #endif
+    if (argc > 2 && std::string(argv[1]) == "bench") return bench("../..", argv[2], argc > 3 ? argv[3] : nullptr);
     std::string root = argc > 1 ? argv[1] : "../..";
     auto encoder = ZhuyinEncoder::load(root + "/data", "zhuyin", "product");
 
